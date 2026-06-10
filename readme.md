@@ -61,7 +61,7 @@ http://localhost:8000
 ### Upload Document
 
 ```http
-POST /upload
+POST /extract
 ```
 
 Supports:
