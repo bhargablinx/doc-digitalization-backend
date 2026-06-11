@@ -1,45 +1,56 @@
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-
-import shutil
-
-from app.services.document_service import process_document
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from contextlib import asynccontextmanager
+from pathlib import Path
+from app.core.config import settings
+from app.core.exceptions import AppException
+from app.api import api_router
 
 
-@app.post("/extract")
-async def upload_file(file: UploadFile):
+def create_app() -> FastAPI:
+    # Setup (need improvemenr)
+    app = FastAPI(
+        title=settings.APP_NAME,
+        description="Doc Digitalization API",
+        version="1.0.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
 
-    try:
+    # CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.allowed_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-        file_path = f"app/uploads/{file.filename}"
-
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        data = process_document(
-            file_path=file_path,
-            filename=file.filename
+    # Error Handling
+    @app.exception_handler(AppException)
+    async def app_exception_handler(request: Request, exc: AppException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers or {},
         )
 
-        return {
-            "success": True,
-            "filename": file.filename,
-            "data": data
-        }
+    # Error Handling
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        return JSONResponse(
+            status_code=422,
+            content={"detail": exc.errors()},
+        )
+    
+    app.include_router(api_router, prefix="/api/v1")
 
-    except Exception as e:
+    @app.get("/health", tags=["Health"])
+    async def health():
+        return {"status": "ok", "app": settings.APP_NAME}
 
-        return {
-            "success": False,
-            "error": str(e)
-        }
+    return app
+
+app = create_app()
