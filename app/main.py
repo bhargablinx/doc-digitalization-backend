@@ -2,6 +2,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from contextlib import asynccontextmanager
+from pathlib import Path
+from app.core.config import settings
+from app.core.exceptions import AppException
+from app.api import api_router
 
 
 def create_app() -> FastAPI:
@@ -39,5 +44,13 @@ def create_app() -> FastAPI:
             status_code=422,
             content={"detail": exc.errors()},
         )
+    
+    app.include_router(api_router, prefix="/api/v1")
+
+    @app.get("/health", tags=["Health"])
+    async def health():
+        return {"status": "ok", "app": settings.APP_NAME}
+
+    return app
 
 app = create_app()
