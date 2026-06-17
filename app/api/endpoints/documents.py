@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, time
 from pathlib import Path
 from typing import Annotated
 
@@ -16,7 +16,7 @@ from app.schemas.document import (
     VerifyRequest, RejectRequest, DocumentListResponse,
 )
 from app.core.roles import Role
-from app.core.exceptions import NotFoundError, ForbiddenError, AppException
+from app.core.exceptions import NotFoundError, ForbiddenError, AppException, ValidationError
 from app.api.deps import CurrentUser, require_min_role
 from app.services.storage import save_upload
 from app.services.extraction import process_document
@@ -27,11 +27,7 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 AdminOrAbove = require_min_role(Role.ADMIN)
 
 
-
-# ---------------------------------------------------------------------------
 # Upload
-# ---------------------------------------------------------------------------
-
 @router.post("", response_model=DocumentResponse, status_code=201)
 async def upload_document(
     current_user: CurrentUser,
@@ -39,10 +35,8 @@ async def upload_document(
     file: UploadFile = File(...),
 ):
     """Any authenticated user can upload a document."""
-    # 1. Persist file to disk
     file_path, size, mime = await save_upload(file, current_user.id)
 
-    # 2. Create DB record (PENDING)
     doc = Document(
         user_id=current_user.id,
         file_path=file_path,
@@ -52,15 +46,11 @@ async def upload_document(
         status=DocStatus.PENDING,
     )
     db.add(doc)
-    await db.flush()   # get doc.id
+    await db.flush()
 
-    # 3. Run extraction service
     extracted = await process_document(file_path)
-
-    # 4. Store extracted data
     doc.extracted_data = extracted
 
-    # 5. Audit
     db.add(AuditLog(
         document_id=doc.id,
         action="uploaded",
@@ -82,18 +72,20 @@ async def list_documents(
     page_size: int = Query(settings.DEFAULT_PAGE_SIZE, ge=1, le=settings.MAX_PAGE_SIZE),
     status: DocStatus | None = None,
     user_id: int | None = None,
+    date_from: date | None = Query(None, description="Only return documents uploaded on/after this date (YYYY-MM-DD). Admin/Super Admin only."),
+    date_to: date | None = Query(None, description="Only return documents uploaded on/before this date (YYYY-MM-DD). Admin/Super Admin only."),
 ):
-    """
-    Users see their own documents.
-    Admins see documents belonging to their assigned users (+ their own).
-    Super admins see all documents.
-    """
+    if (date_from or date_to) and current_user.role == Role.USER:
+        raise ForbiddenError("Date range filtering is restricted to admins.")
+
+    if date_from and date_to and date_from > date_to:
+        raise ValidationError("date_from cannot be after date_to.")
+
     q = select(Document)
 
     if current_user.role == Role.USER:
         q = q.where(Document.user_id == current_user.id)
     elif current_user.role == Role.ADMIN:
-        # Gather IDs of supervised users + self
         result = await db.execute(
             select(User.id).where((User.admin_id == current_user.id) | (User.id == current_user.id))
         )
@@ -104,15 +96,21 @@ async def list_documents(
                 raise ForbiddenError("You can only view documents of users assigned to you.")
             q = q.where(Document.user_id == user_id)
     else:
-        # Super admin
         if user_id:
             q = q.where(Document.user_id == user_id)
 
     if status:
         q = q.where(Document.status == status)
 
+    if date_from:
+        q = q.where(Document.uploaded_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        q = q.where(Document.uploaded_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
+
     total = await db.scalar(select(func.count()).select_from(q.subquery()))
-    result = await db.execute(q.order_by(Document.uploaded_at.desc()).offset((page - 1) * page_size).limit(page_size))
+    result = await db.execute(
+        q.order_by(Document.uploaded_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    )
     docs = result.scalars().all()
 
     return DocumentListResponse(total=total or 0, page=page, page_size=page_size, items=list(docs))
@@ -130,11 +128,7 @@ async def get_document(
     return doc
 
 
-
-# ---------------------------------------------------------------------------
 # FILE SERVING  ← NEW
-# ---------------------------------------------------------------------------
-
 @router.get("/{doc_id}/file", summary="Stream the original uploaded file")
 async def serve_document_file(
     doc_id: int,
@@ -184,8 +178,6 @@ async def serve_document_file(
     )
 
 
-
-
 # Update (manual correction of extracted data)
 @router.put("/{doc_id}", response_model=DocumentResponse)
 async def update_document(
@@ -194,7 +186,6 @@ async def update_document(
     current_user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Users can correct their own documents; admins can correct any accessible doc."""
     doc = await _fetch_doc_or_404(doc_id, db)
     await _assert_doc_access(current_user, doc, db)
 
@@ -272,7 +263,7 @@ async def reject_document(
     return doc
 
 
-# Audit log for a document
+# Audit log
 @router.get("/{doc_id}/audit", response_model=list)
 async def get_audit_log(
     doc_id: int,
@@ -305,7 +296,6 @@ async def _assert_doc_access(current_user: User, doc: Document, db: AsyncSession
         if doc.user_id != current_user.id:
             raise ForbiddenError()
         return
-    # ADMIN: check document owner is supervised by this admin
     result = await db.execute(
         select(User).where(
             (User.id == doc.user_id) &
@@ -314,3 +304,14 @@ async def _assert_doc_access(current_user: User, doc: Document, db: AsyncSession
     )
     if not result.scalar_one_or_none():
         raise ForbiddenError("Document does not belong to any user under your supervision.")
+
+
+def _ext_to_mime(ext: str) -> str:
+    return {
+        "pdf":  "application/pdf",
+        "png":  "image/png",
+        "jpg":  "image/jpeg",
+        "jpeg": "image/jpeg",
+        "tiff": "image/tiff",
+        "bmp":  "image/bmp",
+    }.get(ext, "application/octet-stream")
