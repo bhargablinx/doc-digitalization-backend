@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated
+
 from fastapi import APIRouter, Depends, UploadFile, File, Query
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+
 from app.db.session import get_db
 from app.models.document import Document, DocStatus
 from app.models.audit_log import AuditLog
@@ -12,7 +16,7 @@ from app.schemas.document import (
     VerifyRequest, RejectRequest, DocumentListResponse,
 )
 from app.core.roles import Role
-from app.core.exceptions import NotFoundError, ForbiddenError
+from app.core.exceptions import NotFoundError, ForbiddenError, AppException
 from app.api.deps import CurrentUser, require_min_role
 from app.services.storage import save_upload
 from app.services.extraction import process_document
@@ -21,6 +25,7 @@ from app.core.config import settings
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
 AdminOrAbove = require_min_role(Role.ADMIN)
+
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +128,62 @@ async def get_document(
     doc = await _fetch_doc_or_404(doc_id, db)
     await _assert_doc_access(current_user, doc, db)
     return doc
+
+
+
+# ---------------------------------------------------------------------------
+# FILE SERVING  ← NEW
+# ---------------------------------------------------------------------------
+
+@router.get("/{doc_id}/file", summary="Stream the original uploaded file")
+async def serve_document_file(
+    doc_id: int,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    download: bool = Query(False, description="Set to true to force a file download instead of inline preview"),
+):
+    """
+    Stream the raw file stored on disk back to the client.
+
+    - **Inline** (default): browser renders PDF/images directly — ideal for preview iframes.
+    - **Download** (`?download=true`): forces `Content-Disposition: attachment`.
+
+    Access rules are identical to GET /documents/{id}:
+    - Users can only access their own documents.
+    - Admins can access documents of users they supervise.
+    - Super admins can access any document.
+    """
+    doc = await _fetch_doc_or_404(doc_id, db)
+    await _assert_doc_access(current_user, doc, db)
+
+    file_path = Path(doc.file_path)
+
+    if not file_path.exists():
+        raise AppException(
+            status_code=404,
+            detail=f"Physical file not found on server. It may have been moved or deleted.",
+        )
+
+    # Determine content-type — fall back to stored mime or octet-stream
+    mime = doc.mime_type or _ext_to_mime(file_path.suffix.lstrip(".").lower())
+
+    disposition = (
+        f'attachment; filename="{doc.original_filename}"'
+        if download
+        else f'inline; filename="{doc.original_filename}"'
+    )
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=mime,
+        headers={
+            "Content-Disposition": disposition,
+            # Allow browser to cache for 5 minutes (file never changes)
+            "Cache-Control": "private, max-age=300",
+        },
+    )
+
+
 
 
 # Update (manual correction of extracted data)
