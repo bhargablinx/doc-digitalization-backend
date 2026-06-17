@@ -1,5 +1,6 @@
 # Virtual Environment
 .venv/
+personal.md
 
 # Python cache
 __pycache__/
