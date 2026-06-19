@@ -9,13 +9,6 @@ if TYPE_CHECKING:
     from app.models.user import User
     from app.models.audit_log import AuditLog
 
-
-class DocumentStatus(str):
-    PENDING = "pending"
-    VERIFIED = "verified"
-    REJECTED = "rejected"
-
-
 import enum
 
 class DocStatus(str, enum.Enum):
