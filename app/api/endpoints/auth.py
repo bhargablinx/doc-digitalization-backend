@@ -48,7 +48,7 @@ async def login(
         raise UnauthorizedError("Invalid email or password.")
 
     return TokenResponse(
-        access_token=create_access_token(user.id, {"role": user.role}),
+        access_token=create_access_token(user.id, {"role": user.role.value}),
         refresh_token=create_refresh_token(user.id),
     )
 
@@ -72,7 +72,7 @@ async def refresh(
         raise UnauthorizedError()
 
     return TokenResponse(
-        access_token=create_access_token(user.id, {"role": user.role}),
+        access_token=create_access_token(user.id, {"role": user.role.value}),
         refresh_token=create_refresh_token(user.id),
     )
 
