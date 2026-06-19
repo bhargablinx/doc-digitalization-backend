@@ -62,7 +62,10 @@ async def refresh(
     if not data or data.get("type") != "refresh":
         raise UnauthorizedError("Invalid or expired refresh token.")
 
-    user_id = int(data["sub"])
+    try:
+        user_id = int(data["sub"])
+    except (KeyError, ValueError):
+        raise UnauthorizedError()
     result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
     user = result.scalar_one_or_none()
     if not user:
