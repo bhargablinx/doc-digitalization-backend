@@ -21,6 +21,7 @@ from app.api.deps import CurrentUser, require_min_role
 from app.services.storage import save_upload
 from app.services.extraction import process_document
 from app.core.config import settings
+from app.schemas.audit_log import AuditLogResponse
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -264,7 +265,7 @@ async def reject_document(
 
 
 # Audit log
-@router.get("/{doc_id}/audit", response_model=list)
+@router.get("/{doc_id}/audit", response_model=list[AuditLogResponse])
 async def get_audit_log(
     doc_id: int,
     current_user: CurrentUser,
