@@ -1,6 +1,6 @@
 import uuid
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import aiofiles
 from fastapi import UploadFile
 from app.core.config import settings
@@ -26,7 +26,9 @@ async def save_upload(file: UploadFile, user_id: int) -> tuple[str, int, str]:
         raise FileTooLargeError(settings.MAX_FILE_SIZE_MB)
 
     # Build storage path: uploads/<user_id>/<date>/<uuid>.<ext>
-    date_part = datetime.utcnow().strftime("%Y/%m/%d")
+    date_part = datetime.now(
+        timezone.utc
+    ).strftime("%Y/%m/%d")
     dest_dir = Path(settings.UPLOAD_DIR) / str(user_id) / date_part
     dest_dir.mkdir(parents=True, exist_ok=True)
 
