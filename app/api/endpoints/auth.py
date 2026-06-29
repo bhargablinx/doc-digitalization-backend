@@ -1,7 +1,7 @@
 from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, RefreshRequest
@@ -42,7 +42,13 @@ async def login(
     payload: LoginRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    result = await db.execute(select(User).where(User.email == payload.email, User.is_active == True))
+    identifier = payload.email.strip()
+    result = await db.execute(
+        select(User).where(
+            or_(User.email == identifier, User.username == identifier),
+            User.is_active == True,
+        )
+    )
     user = result.scalar_one_or_none()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise UnauthorizedError("Invalid email or password.")

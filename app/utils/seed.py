@@ -44,6 +44,36 @@ SEED_USERS = [
 ]
 
 
+async def ensure_superadmin(db):
+    data = SEED_USERS[0]
+    existing = await db.scalar(select(User).where(User.username == data["username"]))
+    if existing:
+        changed = False
+        if existing.email != data["email"]:
+            existing.email = data["email"]
+            changed = True
+        if existing.role != data["role"]:
+            existing.role = data["role"]
+            changed = True
+        if not existing.hashed_password:
+            existing.hashed_password = hash_password(data["password"])
+            changed = True
+        if changed:
+            print(f"  [updated] {data['email']}  role={data['role']}")
+        return existing
+
+    user = User(
+        username=data["username"],
+        email=data["email"],
+        hashed_password=hash_password(data["password"]),
+        role=data["role"],
+    )
+    db.add(user)
+    await db.flush()
+    print(f"  [created] {data['email']}  role={data['role']}")
+    return user
+
+
 async def seed():
     async with AsyncSessionLocal() as db:
         created: dict[str, User] = {}

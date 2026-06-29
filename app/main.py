@@ -5,6 +5,8 @@ from fastapi.exceptions import RequestValidationError
 from app.core.config import settings
 from app.core.exceptions import AppException
 from app.api import api_router
+from app.utils.seed import ensure_superadmin
+from app.db.session import AsyncSessionLocal
 
 
 def create_app() -> FastAPI:
@@ -48,6 +50,12 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["Health"])
     async def health():
         return {"status": "ok", "app": settings.APP_NAME}
+
+    @app.on_event("startup")
+    async def bootstrap_default_accounts():
+        async with AsyncSessionLocal() as db:
+            await ensure_superadmin(db)
+            await db.commit()
 
     return app
 
